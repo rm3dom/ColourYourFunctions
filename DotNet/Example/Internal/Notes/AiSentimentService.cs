@@ -8,10 +8,9 @@ internal sealed class AiSentimentService
     /// Calls an AI service, it is potentially a long-running operation.
     /// </summary>
     [TxNever]
-#pragma warning disable CA1822
     public async Task<int> GetSentimentAsync(string text)
-#pragma warning restore CA1822
     {
+        await TxAssert.AssertTxNeverAsync();
         //Dummy
         await Task.Delay(1000);
         return 0;
