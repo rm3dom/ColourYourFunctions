@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+
+        <EnableNETAnalyzers>true</EnableNETAnalyzers>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+        <Nullable>enable</Nullable>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+        <NoWarn>
+            CA1822,
+            CA2007,
+            CA1812,
+            CA1062,
+            CA1848,
+        </NoWarn>
+        <WarningsNotAsErrors>
+            CA1822,
+            CA2007,
+            CA1812,
+            CA1062,
+            CA1848,
+        </WarningsNotAsErrors>
+        <RootNamespace>ColourYourFunctions</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.10"/>
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.10"/>
+    </ItemGroup>
+</Project>
