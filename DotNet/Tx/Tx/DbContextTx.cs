@@ -8,6 +8,11 @@ using IsolationLevel = System.Data.IsolationLevel;
 
 namespace ColourYourFunctions.Tx;
 
+/// <summary>
+///     Default ITxFactory implementation using an EF Core DbContext per transaction attempt.
+///     Provides retry, timeout and isolation-level handling and enforces tx-never-nest rules.
+/// </summary>
+/// <typeparam name="TDbContext">The EF Core DbContext type used for the transaction scope.</typeparam>
 public class DbContextTx<TDbContext>(
     IServiceScopeFactory scopeFactory,
     ILogger<DbContextTx<TDbContext>> logger,
@@ -21,45 +26,84 @@ public class DbContextTx<TDbContext>(
         TxAssert.InstallAsserter(new TxAsserter());
     }
 
-    private sealed record Tx(TDbContext DbContext, TxOptions Options, bool ReadOnly) : ITxWrite<TDbContext>
+    /// <summary>
+    ///     Executes the provided function inside a read-only transaction.
+    ///     Nested writes are not allowed and will assert via TxAssert.
+    /// </summary>
+    /// <typeparam name="T">Return type.</typeparam>
+    /// <param name="func">The function to execute with a transactional read participant.</param>
+    /// <param name="options">Optional transaction options (timeout, retries, isolation level).</param>
+    /// <param name="cancellationToken">Cancellation token for the overall operation.</param>
+    /// <returns>The result of the function.</returns>
+    public async Task<T> ExecuteReadAsync<T>(Func<ITxRead<TDbContext>, Task<T>> func, TxOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
-        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
-            => DbContext.SaveChangesAsync(cancellationToken);
+        return await ExecuteAsync(func, options, true, cancellationToken);
     }
 
-    private sealed class TxAsserter : ITxAsserter
+    /// <summary>
+    ///     Executes the provided function inside a read-only transaction.
+    ///     Synchronous helper that wraps the function into a Task.
+    /// </summary>
+    /// <typeparam name="T">Return type.</typeparam>
+    /// <param name="func">The function to execute with a transactional read participant.</param>
+    /// <param name="options">Optional transaction options (timeout, retries, isolation level).</param>
+    /// <param name="cancellationToken">Cancellation token for the overall operation.</param>
+    /// <returns>The result of the function.</returns>
+    public async Task<T> ExecuteRead<T>(Func<ITxRead<TDbContext>, T> func, TxOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
-        public Task AssertTxNeverAsync()
+        return await ExecuteAsync(tx => Task.FromResult(func(tx)), options, true, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Executes the provided function inside a read/write transaction.
+    ///     Retries on transient DbException up to the configured retry count.
+    /// </summary>
+    /// <typeparam name="T">Return type.</typeparam>
+    /// <param name="func">The function to execute with a transactional write participant.</param>
+    /// <param name="options">Optional transaction options (timeout, retries, isolation level).</param>
+    /// <param name="cancellationToken">Cancellation token for the overall operation.</param>
+    /// <returns>The result of the function.</returns>
+    public Task<T> ExecuteWriteAsync<T>(Func<ITxWrite<TDbContext>, Task<T>> func, TxOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        return ExecuteAsync(func, options, false, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Executes the provided function inside a read/write transaction.
+    ///     Convenience overload for functions returning Task.
+    /// </summary>
+    /// <param name="func">The function to execute with a transactional write participant.</param>
+    /// <param name="options">Optional transaction options (timeout, retries, isolation level).</param>
+    /// <param name="cancellationToken">Cancellation token for the overall operation.</param>
+    public async Task ExecuteWriteAsync(Func<ITxWrite<TDbContext>, Task> func, TxOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        await ExecuteAsync(async tx =>
         {
-            var stack = TxStack.Value;
-            Debug.Assert(stack == null || stack.IsEmpty, "TxNever");
-            return Task.CompletedTask;
-        }
+            await func(tx);
+            return Task.FromResult(true);
+        }, options, false, cancellationToken);
+    }
 
-        public Task AssertTxNeverNestAsync(TxOptions options, bool isReadOnly, IsolationLevel isolationLevel)
+
+    /// <summary>
+    ///     Executes the provided action inside a read/write transaction.
+    ///     Synchronous helper that wraps the action into a Task.
+    /// </summary>
+    /// <param name="func">The action to execute with a transactional write participant.</param>
+    /// <param name="options">Optional transaction options (timeout, retries, isolation level).</param>
+    /// <param name="cancellationToken">Cancellation token for the overall operation.</param>
+    public async Task ExecuteWrite(Action<ITxWrite<TDbContext>> func, TxOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        await ExecuteAsync(tx =>
         {
-            var stack = TxStack.Value;
-            if (stack == null || stack.IsEmpty) return Task.CompletedTask;
-            
-            var top = stack.Peek();
-
-            if (top.ReadOnly && !isReadOnly)
-            {
-                Debug.Assert(false, "TxNeverNest read -> write");
-            }
-
-            if (!top.ReadOnly && !isReadOnly)
-            {
-                Debug.Assert(false, "TxNeverNest write -> write");
-            }
-            
-            if (!top.ReadOnly && isolationLevel == IsolationLevel.ReadCommitted)
-            {
-                Debug.Assert(false, "TxNeverNest write -> ReadCommitted");
-            }
-
-            return Task.CompletedTask;
-        }
+            func(tx);
+            return Task.FromResult(true);
+        }, options, false, cancellationToken);
     }
 
     private void PushTx(Tx tx)
@@ -87,14 +131,15 @@ public class DbContextTx<TDbContext>(
         bool readOnly,
         CancellationToken cancellationToken)
     {
-        var isolationLevel = options?.IsolationLevel ?? configuration?.DefaultIsolationLevel ?? IsolationLevel.ReadCommitted;
+        var isolationLevel = options?.IsolationLevel ??
+                             configuration?.DefaultIsolationLevel ?? IsolationLevel.ReadCommitted;
         var timeout = options?.Timeout ?? configuration?.DefaultTimeout ?? TimeSpan.FromSeconds(30);
         var numRetries = options?.RetryCount ?? configuration?.RetryCount ?? 3;
-        
+
         var txOptions = options ?? new TxOptions(
-            Timeout: timeout,
-            RetryCount: numRetries,
-            IsolationLevel: isolationLevel
+            timeout,
+            numRetries,
+            isolationLevel
         );
 
         await TxAssert.AssertTxNeverNestAsync(txOptions, readOnly, isolationLevel);
@@ -122,24 +167,15 @@ public class DbContextTx<TDbContext>(
                 try
                 {
                     var res = await func(dbTx);
-                    if (!readOnly)
-                    {
-                        await dbContext.SaveChangesAsync(token);
-                    }
+                    if (!readOnly) await dbContext.SaveChangesAsync(token);
 
                     if (configuration is { TestRetries: > 0 } && testRetries <= configuration.TestRetries)
-                    {
                         throw new TestRetryException();
-                    }
 
                     if (!readOnly)
-                    {
                         await tx.CommitAsync(token);
-                    }
                     else
-                    {
                         await tx.RollbackAsync(CancellationToken.None);
-                    }
 
                     return res;
                 }
@@ -152,62 +188,68 @@ public class DbContextTx<TDbContext>(
             catch (DbException ex)
             {
                 logger.LogError(ex, "Transaction error: {Message}", ex.Message);
-                if (retryCount > numRetries)
-                {
-                    throw;
-                }
+                if (retryCount > numRetries) throw;
             }
             finally
             {
-                if (dbTx != null)
-                {
-                    PopTx(dbTx);
-                }
+                if (dbTx != null) PopTx(dbTx);
             }
         }
     }
 
-    public async Task<T> ExecuteReadAsync<T>(Func<ITxRead<TDbContext>, Task<T>> func, TxOptions? options = null,
-        CancellationToken cancellationToken = default) =>
-        await ExecuteAsync(func, options, readOnly: true, cancellationToken);
-
-    public async Task<T> ExecuteRead<T>(Func<ITxRead<TDbContext>, T> func, TxOptions? options = null,
-        CancellationToken cancellationToken = default) =>
-        await ExecuteAsync(tx => Task.FromResult(func(tx)), options, readOnly: true, cancellationToken);
-
-    public Task<T> ExecuteWriteAsync<T>(Func<ITxWrite<TDbContext>, Task<T>> func, TxOptions? options = null,
-        CancellationToken cancellationToken = default) =>
-        ExecuteAsync(func, options, false, cancellationToken);
-
-    public async Task ExecuteWriteAsync(Func<ITxWrite<TDbContext>, Task> func, TxOptions? options = null,
-        CancellationToken cancellationToken = default)
+    private sealed record Tx(TDbContext DbContext, TxOptions Options, bool ReadOnly) : ITxWrite<TDbContext>
     {
-        await ExecuteAsync(async tx =>
+        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
-            await func(tx);
-            return Task.FromResult(true);
-        }, options, false, cancellationToken);
+            return DbContext.SaveChangesAsync(cancellationToken);
+        }
     }
 
-
-    public async Task ExecuteWrite(Action<ITxWrite<TDbContext>> func, TxOptions? options = null,
-        CancellationToken cancellationToken = default)
+    private sealed class TxAsserter : ITxAsserter
     {
-        await ExecuteAsync(tx =>
+        public Task AssertTxNeverAsync()
         {
-            func(tx);
-            return Task.FromResult(true);
-        }, options, false, cancellationToken);
+            var stack = TxStack.Value;
+            Debug.Assert(stack == null || stack.IsEmpty, "TxNever");
+            return Task.CompletedTask;
+        }
+
+        public Task AssertTxNeverNestAsync(TxOptions options, bool isReadOnly, IsolationLevel isolationLevel)
+        {
+            var stack = TxStack.Value;
+            if (stack == null || stack.IsEmpty) return Task.CompletedTask;
+
+            var top = stack.Peek();
+
+            if (top.ReadOnly && !isReadOnly) Debug.Assert(false, "TxNeverNest read -> write");
+
+            if (!top.ReadOnly && !isReadOnly) Debug.Assert(false, "TxNeverNest write -> write");
+
+            if (!top.ReadOnly && isolationLevel == IsolationLevel.ReadCommitted)
+                Debug.Assert(false, "TxNeverNest write -> ReadCommitted");
+
+            return Task.CompletedTask;
+        }
     }
 }
 
+/// <summary>
+///     Exception thrown intentionally to simulate retries during testing.
+///     Only used when TxConfiguration.TestRetries is configured to a value > 0.
+/// </summary>
 public sealed class TestRetryException(string message, Exception? innerException)
     : DbException(message, innerException)
 {
+    /// <summary>
+    ///     Creates a new TestRetryException with a default message.
+    /// </summary>
     public TestRetryException() : this("Test retry", null)
     {
     }
 
+    /// <summary>
+    ///     Creates a new TestRetryException with a custom message.
+    /// </summary>
     public TestRetryException(string message) : this(message, null)
     {
     }

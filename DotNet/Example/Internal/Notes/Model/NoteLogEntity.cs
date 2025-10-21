@@ -1,10 +1,10 @@
 namespace ColourYourFunctions.Internal.Notes.Model;
 
-enum LogType
+internal enum LogType
 {
     Opened,
     Updated,
-    Deleted,
+    Deleted
 }
 
 internal sealed class NoteLogEntity
@@ -12,6 +12,6 @@ internal sealed class NoteLogEntity
     public Guid Id { get; set; } = Guid.NewGuid();
     public string? Content { get; set; }
     public LogType LogType { get; set; }
-    
+
     public int Sentiment { get; set; }
 }

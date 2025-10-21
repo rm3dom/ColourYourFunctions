@@ -8,12 +8,14 @@ namespace ColourYourFunctions.Internal;
 public static class Wiring
 {
     public static IServiceCollection
-        Wire(this IServiceCollection sc, string connectionString = "Data Source=notes.db") =>
-        sc.AddDbContext<NoteDbContext>(builder =>
+        Wire(this IServiceCollection sc, string connectionString = "Data Source=notes.db")
+    {
+        return sc.AddDbContext<NoteDbContext>(builder =>
                 builder.UseSqlite(connectionString)
             )
             .AddSingleton<ITxFactory<NoteDbContext>, DbContextTx<NoteDbContext>>()
             .AddSingleton<NoteService>()
             .AddSingleton<NoteRepository>()
             .AddSingleton<AiSentimentService>();
+    }
 }

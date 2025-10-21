@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using ColourYourFunctions.Internal.Db;
 using ColourYourFunctions.Internal.Notes.Model;
 using ColourYourFunctions.Tx;
@@ -12,13 +11,19 @@ internal sealed class NoteRepository
         ITxRead<NoteDbContext> tx,
         Guid id,
         CancellationToken cancellationToken = default
-    ) => await tx.DbContext.Notes.FindAsync([id], cancellationToken: cancellationToken);
+    )
+    {
+        return await tx.DbContext.Notes.FindAsync([id], cancellationToken);
+    }
 
     public async Task<IReadOnlyCollection<NoteEntity>> FindNotesAsync(
         ITxRead<NoteDbContext> tx,
         string content,
         CancellationToken cancellationToken = default
-    ) => await tx.DbContext.Notes.Where(it => it.Content.Contains(content)).ToListAsync(cancellationToken);
+    )
+    {
+        return await tx.DbContext.Notes.Where(it => it.Content.Contains(content)).ToListAsync(cancellationToken);
+    }
 
     public NoteEntity Create(
         ITxWrite<NoteDbContext> tx,
@@ -37,7 +42,8 @@ internal sealed class NoteRepository
         LogType logType
     )
     {
-        var entity = new NoteLogEntity { Id = note.Id, Content = note.Content, Sentiment = note.Sentiment, LogType = logType };
+        var entity = new NoteLogEntity
+            { Id = note.Id, Content = note.Content, Sentiment = note.Sentiment, LogType = logType };
         tx.DbContext.NoteLogs.Add(entity);
     }
 }

@@ -43,12 +43,10 @@ internal sealed class NoteService(
 
         //Then writes
         if (note != null)
-        {
             await txFactory.ExecuteWrite(
                 tx => noteRepository.CreateLog(tx, note, LogType.Opened),
                 cancellationToken: cancellationToken
             );
-        }
 
         return note;
     }
@@ -57,7 +55,10 @@ internal sealed class NoteService(
         ITxRead<NoteDbContext> tx,
         string content,
         CancellationToken cancellationToken = default
-    ) => noteRepository.FindNotesAsync(tx, content, cancellationToken);
+    )
+    {
+        return noteRepository.FindNotesAsync(tx, content, cancellationToken);
+    }
 
     public async Task<NoteEntity> CreateAsync(
         ITxWrite<NoteDbContext> tx,
@@ -66,12 +67,10 @@ internal sealed class NoteService(
     )
     {
         //Long-running must not be run in a Tx, it attributed with [TxNever]
-        var sentiment =  await sentimentService.GetSentimentAsync(content);
-        
+        var sentiment = await sentimentService.GetSentimentAsync(content);
+
         var note = noteRepository.Create(tx, content, sentiment);
         await tx.SaveChangesAsync(cancellationToken);
         return note;
     }
-    
-    
 }

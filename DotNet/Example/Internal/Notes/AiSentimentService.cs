@@ -5,7 +5,7 @@ namespace ColourYourFunctions.Internal.Notes;
 internal sealed class AiSentimentService
 {
     /// <summary>
-    /// Calls an AI service, it is potentially a long-running operation.
+    ///     Calls an AI service, it is potentially a long-running operation.
     /// </summary>
     [TxNever]
     public async Task<int> GetSentimentAsync(string text)

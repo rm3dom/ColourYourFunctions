@@ -11,9 +11,6 @@ namespace ColourYourFunctions.Test;
 [TestFixture]
 public class TxTest
 {
-    private ServiceProvider? _provider;
-    private ServiceProvider Provider => _provider ?? throw new InvalidOperationException("Setup not called");
-
     [OneTimeSetUp]
     public void Setup()
     {
@@ -23,7 +20,7 @@ public class TxTest
             .AddLogging()
             .Wire("Data Source=test.db;Cache=Shared;Mode=ReadWriteCreate")
             .AddSingleton(new TxConfiguration(
-                DefaultTimeout: TimeSpan.FromSeconds(10),
+                TimeSpan.FromSeconds(10),
                 TestRetries: 1,
                 DefaultIsolationLevel: IsolationLevel.ReadUncommitted))
             .BuildServiceProvider();
@@ -31,6 +28,9 @@ public class TxTest
         using var db = _provider.GetRequiredService<NoteDbContext>();
         db.Database.EnsureCreated();
     }
+
+    private ServiceProvider? _provider;
+    private ServiceProvider Provider => _provider ?? throw new InvalidOperationException("Setup not called");
 
     [Test(Description = "Test concurrency, tx stack")]
     public void TestConcurrency()
@@ -88,7 +88,7 @@ public class TxTest
             return Task.CompletedTask;
         });
     }
-    
+
 
     //Always fails, can't catch assertion
     [Test(Description = "Assert tx-read tx-never")]
@@ -134,7 +134,7 @@ public class TxTest
 
         Assert.Fail("Should not get here, must die with assertion");
     }
-    
+
     //Always fails, can't catch assertion
     [Test(Description = "Assert tx-read tx-never-nest")]
     public async Task AssertTxNeverNestWriteReadCommitted()
@@ -144,8 +144,8 @@ public class TxTest
         await factory.ExecuteWriteAsync(async _ =>
         {
             await factory.ExecuteReadAsync(_ =>
-                Task.FromResult(true)
-            , new TxOptions(IsolationLevel: IsolationLevel.ReadCommitted));
+                    Task.FromResult(true)
+                , new TxOptions(IsolationLevel: IsolationLevel.ReadCommitted));
             return true;
         });
 
